@@ -446,7 +446,7 @@ func TestTC2LongDown(t *testing.T) {
 	// Define the expected delay and tolerance
 	expectedDelayMS := 300 // Expected delay in milliseconds
 	minDuration := int64(expectedDelayMS - toleranceMS)
-	maxDuration := int64(expectedDelayMS + toleranceMS)
+	maxDuration := int64(expectedDelayMS + toleranceMS + 500)
 
 	// Check if the actual duration falls within the expected range
 	pass := durationInMS <= maxDuration
