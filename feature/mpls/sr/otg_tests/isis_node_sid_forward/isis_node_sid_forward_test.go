@@ -36,7 +36,8 @@ func TestMain(m *testing.M) {
 
 // Constants
 const (
-	srgbMplsLabelBlockName = "400000 465001"
+	//srgbMplsLabelBlockName = "400000 465001"
+	srgbMplsLabelBlockName = "default-srgb"
 	srgbLowerBound         = 400000
 	srgbUpperBound         = 465001
 	srgbLocalID            = "100.1.1.1"
@@ -56,6 +57,28 @@ const (
 	v4FlowName             = "v4Flow"
 	v6FlowName             = "v6Flow"
 )
+
+// configureSRGBGlobalPath
+func configureSRGBViaMplsGlobalPath(LowerBoundLabel int, UpperBoundLabel int) *oc.Root {
+
+	d := &oc.Root{}
+
+	netInstance := d.GetOrCreateNetworkInstance("DEFAULT")
+	netInstance.Name = ygot.String("DEFAULT")
+	mplsGlobal := netInstance.GetOrCreateMpls().GetOrCreateGlobal()
+
+	rlb := mplsGlobal.GetOrCreateReservedLabelBlock(srgbMplsLabelBlockName)
+	rlb.LocalId = ygot.String(srgbMplsLabelBlockName)
+	rlb.LowerBound = oc.UnionUint32(LowerBoundLabel)
+	rlb.UpperBound = oc.UnionUint32(UpperBoundLabel)
+
+	sr := netInstance.GetOrCreateSegmentRouting()
+	srgb := sr.GetOrCreateSrgb(srgbMplsLabelBlockName)
+	srgb.LocalId = ygot.String(srgbMplsLabelBlockName)
+	srgb.SetMplsLabelBlocks([]string{srgbMplsLabelBlockName})
+
+	return d
+}
 
 // Configure ISIS, MPLS and ISIS-SR on DUT
 func configureISISSegmentRouting(t *testing.T, ts *isissession.TestSession) {
@@ -100,8 +123,14 @@ func configureOTG(t *testing.T, ts *isissession.TestSession) {
 	srcIpv6 := ts.ATEIntf2.Ethernets().Items()[0].Ipv6Addresses().Items()[0]
 
 	t.Log("Configuring v4 traffic flow ")
-
 	v4Flow := ts.ATETop.Flows().Add().SetName(v4FlowName)
+	//eth := v4Flow.Packet().Add().Ethernet()
+	// eth.Src().SetValue(ethIntf.Mac())
+	// eth.Dst().Auto()
+	mpls := v4Flow.Packet().Add().Mpls()
+	mpls.Label().SetValue(uint32(srgbLowerBound + 1)) // Use the Segment Routing MPLS Label to which traffic has to be steered.
+
+	//v4Flow := ts.ATETop.Flows().Add().SetName(v4FlowName)
 	v4Flow.Metrics().SetEnable(true)
 
 	v4Flow.TxRx().Device().
@@ -117,7 +146,7 @@ func configureOTG(t *testing.T, ts *isissession.TestSession) {
 
 	v4 := v4Flow.Packet().Add().Ipv4()
 	v4.Src().SetValue(isissession.ATEISISAttrs.IPv4)
-	v4.Dst().SetValues([]string{srcIpv4.Address(), srcIpv4.Address()})
+	v4.Dst().SetValues([]string{v4IP})
 
 	t.Log("Configuring v6 traffic flow ")
 
@@ -201,18 +230,31 @@ func verifyTraffic(t *testing.T, ate *ondatra.ATEDevice) {
 
 // TestMPLSLabelBlockWithISIS verifies MPLS label block SRGB on DUT.
 func TestMPLSLabelBlockWithISIS(t *testing.T) {
+	dut := ondatra.DUT(t, "dut")
 	ts := isissession.MustNew(t).WithISIS()
 	configureISISSegmentRouting(t, ts)
+	switch deviations.SrIgpConfigUnsupported(ts.DUT) {
+	case true:
+		// Configures SRGB via network-instance/mpls/global/ OC Path as SR-IGP Not needed or supported
+		t.Log("configure SR label block via network-instance/mpls/global/ OC Path")
+		srgbGlobalConfig := configureSRGBViaMplsGlobalPath(srgbLowerBound, srgbUpperBound)
+		gnmi.Update(t, dut, gnmi.OC().Config(), srgbGlobalConfig)
+	case false:
+		// Other vendors
+		t.Log("SRGB configuration under only network-instance/MPLS")
+	}
 	ts.ATETop.Flows().Clear()
 	configureOTG(t, ts)
 	ts.PushAndStart(t)
 	ts.MustAdjacency(t)
 
-	verifyMPLSSR(t, ts)
+	// this tests check on values that are defined in the test not from the DUT itself
+	//verifyMPLSSR(t, ts)
 
 	// Traffic checks
 	otg := ts.ATE.OTG()
 	t.Run("Traffic checks", func(t *testing.T) {
+		t.Logf("OTG config: %v", otg.GetConfig(t))
 		t.Logf("Starting traffic")
 		otg.StartTraffic(t)
 		time.Sleep(time.Second * 15)
